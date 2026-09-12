@@ -59,6 +59,9 @@
     nearbyList: $('nearbyList'),
     nearbyTitle: $('nearbyTitle'),
     trackNote: $('trackNote'),
+    peekName: $('peekName'),
+    peekRoute: $('peekRoute'),
+    peekFacts: $('peekFacts'),
     bottomNav: $('bottomNav'),
     destBtn: $('destBtn'),
     listTitle: $('listTitle'),
@@ -102,6 +105,7 @@
     routeLayer: null,
     listSignature: '',
     view: 'list',
+    sheet: 'closed',
     airport: null,
     airportFocus: 'all',
     tab: 'home',
@@ -619,7 +623,7 @@
           riseOnHover: true,
           title: p.callsign || p.registration || 'Plane'
         }).addTo(map);
-        marker.on('click', function () { select(p.hex, false); });
+        marker.on('click', function () { select(p.hex, false, 'peek'); });
         var root = marker.getElement();
         m = state.markers[p.hex] = {
           marker: marker,
@@ -689,18 +693,16 @@
 
   /* ------------------------------------------------------------------ views */
 
-  function showView(which) {
+  function showView(which, sheet) {
     el.listView.hidden = which !== 'list';
     el.detailView.hidden = which !== 'detail';
     el.airportView.hidden = which !== 'airport';
     state.view = which;
-    el.panelHandleText.textContent =
-      which === 'detail' ? 'Show this flight' :
-      which === 'airport' ? 'Show this airport' :
-      'Show the list of planes';
     if (which !== 'list') {
-      openPanel(true);
       el.panelBody.scrollTop = 0;
+      setSheet(sheet || 'full');
+    } else {
+      updateHandleLabel();
     }
   }
 
@@ -857,7 +859,7 @@
 
   // A flight on the board may be outside the map's current view, so fetch it.
   function openFromBoard(f) {
-    if (state.planes[f.hex]) { select(f.hex, true); return; }
+    if (state.planes[f.hex]) { select(f.hex, true, 'full'); return; }
     setStatus('Finding ' + (f.callsign || 'that flight') + '…', 'busy');
     fetch('/api/search?q=' + encodeURIComponent(f.callsign))
       .then(function (r) { return r.json(); })
@@ -868,7 +870,7 @@
         state.planes[p.hex] = p;
         map.setView([p.lat, p.lon], Math.max(map.getZoom(), 8));
         drawPlanes();
-        select(p.hex, false);
+        select(p.hex, false, 'full');
       })
       .catch(function () { showBanner('Could not open that flight.', 'search'); });
   }
@@ -881,9 +883,51 @@
     drawPlanes();
   }
 
-  function openPanel(open) {
-    el.panel.classList.toggle('open', open);
-    el.panelHandle.setAttribute('aria-expanded', String(open));
+  /* The sheet has three heights: out of the way, a quarter-screen peek with the
+     headline, and the whole thing. */
+  function setSheet(mode) {
+    // On a wide screen the panel is a fixed column, so there is nothing to peek.
+    if (window.matchMedia('(min-width: 800px)').matches) mode = 'full';
+    state.sheet = mode;
+    el.panel.classList.toggle('open', mode === 'full');
+    el.panel.classList.toggle('peek', mode === 'peek');
+    el.panelHandle.setAttribute('aria-expanded', String(mode === 'full'));
+    updateHandleLabel();
+    if (mode === 'peek') measurePeek();
+  }
+
+  function openPanel(open) { setSheet(open ? 'full' : 'closed'); }
+
+  function updateHandleLabel() {
+    var label;
+    if (state.view === 'detail') {
+      label = state.sheet === 'full' ? 'Hide the flight details' : 'Show more about this flight';
+    } else if (state.view === 'airport') {
+      label = state.sheet === 'full' ? 'Hide this airport' : 'Show this airport';
+    } else {
+      var n = el.flightList.children.length;
+      label = n ? 'Show ' + n + ' planes near here' : 'Show the list of planes';
+    }
+    el.panelHandleText.textContent = label;
+  }
+
+  /* A quarter of the screen, unless the headline genuinely needs more room —
+     which it does at the largest text size. */
+  function measurePeek() {
+    var summary = document.getElementById('peekSummary');
+    var handle = el.panelHandle.offsetHeight || 0;
+    var body = el.panelBody;
+    var padding = parseFloat(getComputedStyle(body).paddingTop) +
+                  parseFloat(getComputedStyle(body).paddingBottom);
+    var needed = handle + (summary.offsetHeight || 0) + (padding || 32);
+
+    var header = document.querySelector('.topbar').offsetHeight || 0;
+    var nav = el.bottomNav.offsetHeight || 0;
+    var most = window.innerHeight - header - nav;
+
+    var quarter = window.innerHeight * 0.25;
+    var peek = Math.min(Math.max(quarter, needed), most);
+    document.documentElement.style.setProperty('--peek-h', Math.round(peek) + 'px');
   }
 
   function renderList() {
@@ -905,11 +949,7 @@
     el.listHint.textContent = list.length
       ? 'Tap any flight to see where it is going.'
       : 'Try dragging the map, or zooming out with the − button.';
-    if (state.view === 'list') {
-      el.panelHandleText.textContent = list.length
-        ? 'Show ' + list.length + ' planes near here'
-        : 'Show the list of planes';
-    }
+
 
     el.flightList.innerHTML = '';
     list.forEach(function (p) {
@@ -934,13 +974,18 @@
       btn.appendChild(name);
       btn.appendChild(alt);
       btn.appendChild(route);
-      btn.addEventListener('click', function () { select(p.hex, true); });
+      btn.addEventListener('click', function () { select(p.hex, true, 'full'); });
       li.appendChild(btn);
       el.flightList.appendChild(li);
     });
+
+    if (state.view === 'list') updateHandleLabel();
   }
 
-  function select(hex, recenter) {
+  /* sheet: 'peek' when the plane was tapped on the map, so the map stays
+     visible; 'full' when the choice came from a list that already filled the
+     screen. */
+  function select(hex, recenter, sheet) {
     state.selected = hex;
     state.airport = null;
     markAirportPins();
@@ -949,7 +994,7 @@
     var p = state.planes[hex];
     if (p && recenter) map.setView([p.animLat, p.animLon], Math.max(map.getZoom(), 8));
     drawPlanes();
-    showView('detail');
+    showView('detail', sheet || 'peek');
     highlightTab(null);
     renderDetail();
     loadExtras(hex);
@@ -1026,7 +1071,39 @@
     }
 
     renderProgress(p, leg);
+    renderPeek(p, leg);
     drawRouteLine();
+  }
+
+  /* The quarter-screen version: who it is, the two cities, and what it is doing
+     right now. Everything else waits until the sheet is opened fully. */
+  function renderPeek(p, leg) {
+    el.peekName.textContent = friendlyName(p);
+
+    if (leg) {
+      el.peekRoute.innerHTML = '';
+      var from = document.createElement('b');
+      from.textContent = leg.origin.iata || leg.origin.icao || '?';
+      var to = document.createElement('b');
+      to.textContent = leg.destination.iata || leg.destination.icao || '?';
+      el.peekRoute.appendChild(from);
+      el.peekRoute.appendChild(document.createTextNode(' ' + (leg.origin.city || '') + '  →  '));
+      el.peekRoute.appendChild(to);
+      el.peekRoute.appendChild(document.createTextNode(' ' + (leg.destination.city || '')));
+    } else {
+      el.peekRoute.textContent = isPrivate(p)
+        ? 'A private flight — no route is published'
+        : 'Looking up where it is going…';
+    }
+
+    var bits = [plainStatus(p)];
+    if (!p.onGround) {
+      bits.push(formatAltitude(p.altitude, false));
+      if (p.groundSpeed) bits.push(formatSpeed(p.groundSpeed));
+    }
+    el.peekFacts.textContent = bits.join(' · ');
+
+    if (state.sheet === 'peek') measurePeek();
   }
 
   function setEnd(airport, codeEl, cityEl, p) {
@@ -1212,9 +1289,10 @@
 
   el.followBtn.addEventListener('click', function () { setFollow(!state.follow); });
 
+  // Tapping the handle always means "more", until there is no more to give.
   el.panelHandle.addEventListener('click', function () {
-    var opening = !el.panel.classList.contains('open');
-    openPanel(opening);
+    var opening = state.sheet !== 'full';
+    setSheet(opening ? 'full' : 'closed');
     if (state.view === 'list') highlightTab(opening ? 'live' : 'home');
   });
 
@@ -1263,7 +1341,7 @@
           state.planes[p.hex] = p;
           map.setView([p.lat, p.lon], 8);
           drawPlanes();
-          select(p.hex, false);
+          select(p.hex, false, 'peek');
           setStatus('Found ' + (p.callsign || q.toUpperCase()), '');
           el.searchInput.blur();
         } else if (data.reason === 'not-flying' && data.route) {

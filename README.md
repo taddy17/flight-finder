@@ -33,10 +33,13 @@ Node 18 or newer is the only requirement — there is nothing to `npm install`.
   updates instead of jumping. Marker size follows the real aircraft: a light
   four-seater is small, a 777 is large, helicopters get their own shape.
   Overlapping aircraft are thinned out so busy airspace stays readable.
-- **Tap a plane** for the airline and flight number, the two airports in plain
-  words ("Chicago → Los Angeles"), how far along it is, and roughly how long is
-  left in the air. **Track this plane** keeps the map centred on it; tapping an
-  empty patch of map lets go again.
+- **Tap a plane** on the map and the sheet rises a quarter of the way up with
+  just the headline — who it is, the two cities, and what it is doing right now —
+  so the map and the plane you tapped stay in view. The handle across the top
+  opens it the rest of the way for progress, height, speed, aircraft type and a
+  photograph. Picking a flight out of a list opens it fully straight away.
+- **Track this plane** keeps the map centred on it, and says so while it is on.
+  Tapping an empty patch of map, or dragging the map by hand, lets go again.
 - **Tap an airport** for four live boards: what is on the ground there right now
   (parked or taxiing, with its transponder on), what is landing soon, what is
   leaving, and any other aircraft flying close by.
@@ -126,6 +129,9 @@ The design targets comfortable use at arm's length on a phone:
 - full keyboard operation, visible focus rings, and `prefers-reduced-motion`
   honoured
 - a four-item bottom bar on phones, each item an icon with a written label
+- a bottom sheet with three heights rather than an all-or-nothing panel, so
+  reading about one flight never hides the map entirely; the quarter-height peek
+  grows rather than clipping when the text size is turned up
 - plain language throughout: "Coming down" rather than "descending at 1,800 fpm"
 
 ## Licence

@@ -92,6 +92,15 @@
 
     <!-- DETAIL VIEW -->
     <section id="detailView" class="view" hidden>
+
+      <!-- Shown when the sheet is only peeking above the map. -->
+      <div id="peekSummary" class="peek-summary" aria-hidden="true">
+        <p id="peekName" class="peek-name"></p>
+        <p id="peekRoute" class="peek-route"></p>
+        <p id="peekFacts" class="peek-facts"></p>
+      </div>
+
+      <div class="detail-full">
       <button id="backBtn" class="btn btn-back">← Back to the list</button>
 
       <h2 id="flightTitle">&nbsp;</h2>
@@ -135,6 +144,7 @@
       </p>
       <button id="followBtn" class="btn btn-primary btn-wide">Track this plane</button>
       <button id="destBtn" class="btn btn-wide" hidden>See all flights at this airport</button>
+      </div>
     </section>
   </div>
 </aside>
