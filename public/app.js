@@ -1437,11 +1437,15 @@
 
   /* ----------------------------------------------------------------- wiring */
 
-  /* Tapping bare map means "I am done with this one". Leaflet does not raise a
-     map click for taps that land on a plane or an airport pin, so this only
-     fires on empty space. */
+  /* Tapping bare map means "I am done with this one": drop the selection and
+     put the sheet away, so the details that popped up do not linger over the
+     map. Leaflet does not raise a map click for taps that land on a plane or
+     an airport pin, so this only fires on empty space. */
   map.on('click', function () {
-    if (state.selected || state.airport) goBackToList();
+    if (!state.selected && !state.airport) return;
+    goBackToList();
+    openPanel(false);
+    highlightTab('home');
   });
 
   // Dragging the map by hand should never fight the map re-centring itself.
