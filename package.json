@@ -1,0 +1,23 @@
+{
+  "name": "flight-finder",
+  "version": "1.0.0",
+  "description": "A live flight map that is easy to read and easy to tap — see what is overhead, where it came from, and where it is going.",
+  "license": "MIT",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check public/app.js"
+  },
+  "keywords": [
+    "flight-tracker",
+    "adsb",
+    "aviation",
+    "leaflet",
+    "accessibility",
+    "map"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

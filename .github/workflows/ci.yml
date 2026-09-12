@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check syntax
+        run: npm run check
+
+      - name: Server starts and answers
+        run: |
+          node server.js &
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:5173/api/health && break
+            sleep 0.5
+          done
+          curl -sf http://localhost:5173/api/health | grep -q '"ok":true'
+          curl -sf http://localhost:5173/ | grep -q 'Flight Finder'

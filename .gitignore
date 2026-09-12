@@ -1,0 +1,18 @@
+# Lookup caches the server fills in at runtime — safe to delete, never committed.
+cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local tooling
+.claude/
+.env
+.env.local

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#10365f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Flight Finder">
+  <title>Flight Finder — see planes flying near you</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✈️</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand" aria-hidden="true">✈</div>
+  <h1>Flight Finder</h1>
+
+  <form id="searchForm" class="search" role="search">
+    <label class="sr-only" for="searchInput">Flight number or tail number</label>
+    <input id="searchInput" type="search" inputmode="latin" autocomplete="off" spellcheck="false"
+           placeholder="Flight number, like AA100">
+    <button type="submit" class="btn btn-primary">Find it</button>
+  </form>
+
+  <button id="settingsBtn" class="btn btn-plain" aria-label="Settings">
+    <span class="gear" aria-hidden="true">&#9881;</span>
+    <span class="btn-label">Settings</span>
+  </button>
+</header>
+
+<main>
+  <div id="map" role="application" aria-label="Map of planes flying now"></div>
+
+  <p id="banner" class="banner" role="status" hidden></p>
+
+  <div class="map-buttons">
+    <button id="locateBtn" class="round-btn locate" aria-label="Show planes near me">
+      <span aria-hidden="true">◎</span>
+    </button>
+  </div>
+
+</main>
+
+<aside id="panel" class="panel" aria-label="Flight information">
+  <button id="panelHandle" class="panel-handle" aria-expanded="false" aria-controls="panelBody">
+    <span id="panelHandleText">Show the list of planes</span>
+    <span class="chev" aria-hidden="true">▲</span>
+  </button>
+
+  <div id="panelBody" class="panel-body">
+
+    <!-- LIST VIEW -->
+    <section id="listView" class="view">
+      <h2 id="listTitle">Planes flying near here</h2>
+      <p id="listHint" class="hint">Tap any plane to see where it is going.</p>
+      <ul id="flightList" class="flight-list"></ul>
+    </section>
+
+    <!-- AIRPORT VIEW -->
+    <section id="airportView" class="view" hidden>
+      <button class="btn btn-back" data-back>← Back to the list</button>
+      <h2 id="airportName">&nbsp;</h2>
+      <p id="airportWhere" class="sub"></p>
+
+      <h3 class="board-title">Landing here soon</h3>
+      <ul id="arrivalsList" class="flight-list"></ul>
+
+      <h3 class="board-title">Leaving from here</h3>
+      <ul id="departuresList" class="flight-list"></ul>
+
+      <p class="hint board-note">These are aircraft in the sky right now, worked
+        out from what each plane is broadcasting. Flights that have not taken off
+        yet do not appear.</p>
+    </section>
+
+    <!-- DETAIL VIEW -->
+    <section id="detailView" class="view" hidden>
+      <button id="backBtn" class="btn btn-back">← Back to the list</button>
+
+      <h2 id="flightTitle">&nbsp;</h2>
+      <p id="flightSub" class="sub"></p>
+
+      <div class="route">
+        <div class="route-end">
+          <p class="route-label">Came from</p>
+          <p class="route-code" id="fromCode">—</p>
+          <p class="route-city" id="fromCity">Not known</p>
+        </div>
+        <div class="route-mid" aria-hidden="true">
+          <div class="route-line"><span class="route-plane">✈</span></div>
+        </div>
+        <div class="route-end">
+          <p class="route-label">Going to</p>
+          <p class="route-code" id="toCode">—</p>
+          <p class="route-city" id="toCity">Not known</p>
+        </div>
+      </div>
+
+      <div id="progressWrap" class="progress-wrap" hidden>
+        <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+        <p id="progressText" class="progress-text"></p>
+      </div>
+
+      <dl class="facts">
+        <div class="fact"><dt>Right now</dt><dd id="factStatus">—</dd></div>
+        <div class="fact"><dt>Height</dt><dd id="factAlt">—</dd></div>
+        <div class="fact"><dt>Speed</dt><dd id="factSpeed">—</dd></div>
+        <div class="fact"><dt>Aircraft</dt><dd id="factType">—</dd></div>
+      </dl>
+
+      <div id="photoWrap" class="photo-wrap" hidden>
+        <img id="photo" alt="" referrerpolicy="no-referrer">
+        <p class="photo-credit">Photo: airport-data.com</p>
+      </div>
+
+      <button id="followBtn" class="btn btn-primary btn-wide">Keep this plane centred</button>
+      <button id="destBtn" class="btn btn-wide" hidden>See all flights at this airport</button>
+    </section>
+  </div>
+</aside>
+
+<div id="settingsOverlay" class="overlay" hidden>
+  <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <h2 id="settingsTitle">Settings</h2>
+
+    <fieldset class="setting">
+      <legend>Text size</legend>
+      <div class="choices" id="sizeChoices">
+        <button type="button" class="choice" data-size="normal">Normal</button>
+        <button type="button" class="choice" data-size="large">Larger</button>
+        <button type="button" class="choice" data-size="largest">Largest</button>
+      </div>
+    </fieldset>
+
+    <fieldset class="setting">
+      <legend>Show distances in</legend>
+      <div class="choices" id="unitChoices">
+        <button type="button" class="choice" data-units="imperial">Miles</button>
+        <button type="button" class="choice" data-units="metric">Kilometres</button>
+      </div>
+    </fieldset>
+
+    <fieldset class="setting">
+      <legend>Updating</legend>
+      <p id="settingsStatus" class="setting-note" role="status">Starting up…</p>
+      <button id="refreshBtn" type="button" class="btn btn-wide">Refresh the map now</button>
+    </fieldset>
+
+    <button id="showHelpBtn" type="button" class="btn btn-wide">Show the welcome tips again</button>
+    <button id="settingsClose" type="button" class="btn btn-primary btn-wide">Done</button>
+  </div>
+</div>
+
+<div id="helpOverlay" class="overlay" hidden>
+  <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+    <h2 id="helpTitle">Welcome to Flight Finder</h2>
+    <ul class="help-list">
+      <li><b>Planes you see</b> are really in the sky right now.</li>
+      <li><b>Tap a plane</b> to see where it took off and where it is landing.</li>
+      <li><b>Tap an airport</b> to see what is landing and leaving there.</li>
+      <li>Use <b>◎</b> to jump to the planes above your own home.</li>
+      <li>Drag the map with one finger to look somewhere else.</li>
+    </ul>
+    <button id="helpClose" class="btn btn-primary btn-wide">Start looking at planes</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
