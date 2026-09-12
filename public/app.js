@@ -50,8 +50,16 @@
     airportView: $('airportView'),
     airportName: $('airportName'),
     airportWhere: $('airportWhere'),
+    groundList: $('groundList'),
+    groundTitle: $('groundTitle'),
     arrivalsList: $('arrivalsList'),
+    arrivalsTitle: $('arrivalsTitle'),
     departuresList: $('departuresList'),
+    departuresTitle: $('departuresTitle'),
+    nearbyList: $('nearbyList'),
+    nearbyTitle: $('nearbyTitle'),
+    trackNote: $('trackNote'),
+    bottomNav: $('bottomNav'),
     destBtn: $('destBtn'),
     listTitle: $('listTitle'),
     listHint: $('listHint'),
@@ -95,6 +103,8 @@
     listSignature: '',
     view: 'list',
     airport: null,
+    airportFocus: 'all',
+    tab: 'home',
     status: 'Starting up…',
     bannerOwner: null
   };
@@ -696,6 +706,21 @@
 
   /* ----------------------------------------------------------- airport board */
 
+  /* For the Departures and Arrivals tabs: whichever airport the user is looking
+     at, or failing that the most important one near the middle of the map. */
+  function nearestAirport(lat, lon) {
+    var bestBig = null, bestBigD = Infinity;
+    var bestAny = null, bestAnyD = Infinity;
+    airports.forEach(function (ap) {
+      var d = distanceNm([lat, lon], [ap.lat, ap.lon]);
+      if (d < bestAnyD) { bestAnyD = d; bestAny = ap; }
+      if (ap.size === 1 && d < bestBigD) { bestBigD = d; bestBig = ap; }
+    });
+    if (bestBig && bestBigD <= 90) return bestBig;
+    if (bestAny && bestAnyD <= 90) return bestAny;
+    return bestBig || bestAny;
+  }
+
   function findAirport(iata) {
     for (var i = 0; i < airports.length; i++) {
       if (airports[i].iata === iata) return airports[i];
@@ -703,31 +728,51 @@
     return null;
   }
 
-  function openAirport(ap) {
+  function openAirport(ap, focus) {
     if (!ap) return;
     state.airport = ap;
+    state.airportFocus = focus || 'all';
+    setBoardFocus(state.airportFocus);
     clearSelection();
     showView('airport');
 
     el.airportName.textContent = ap.name;
     el.airportWhere.textContent = ap.iata + ' · ' + [ap.city, countryName(ap.country)].filter(Boolean).join(', ');
-    el.arrivalsList.innerHTML = '<li class="empty">Looking for planes on their way in…</li>';
-    el.departuresList.innerHTML = '<li class="empty">Looking for planes on their way out…</li>';
+    var loading = '<li class="empty">Listening for planes…</li>';
+    el.groundList.innerHTML = loading;
+    el.arrivalsList.innerHTML = loading;
+    el.departuresList.innerHTML = loading;
+    el.nearbyList.innerHTML = loading;
+    setBoardTitles(null);
 
     map.setView([ap.lat, ap.lon], Math.max(map.getZoom(), 8));
     markAirportPins();
+    if (state.airportFocus === 'all') highlightTab(null);
 
     fetch('/api/airport?iata=' + encodeURIComponent(ap.iata))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!state.airport || state.airport.iata !== ap.iata) return;  // user moved on
+        setBoardTitles(data.counts);
+        renderBoard(data.onGround, el.groundList, 'ground');
         renderBoard(data.arrivals, el.arrivalsList, 'in');
         renderBoard(data.departures, el.departuresList, 'out');
+        renderBoard(data.nearby, el.nearbyList, 'near');
       })
       .catch(function () {
-        el.arrivalsList.innerHTML = '<li class="empty">Could not load the arrivals just now.</li>';
-        el.departuresList.innerHTML = '<li class="empty">Could not load the departures just now.</li>';
+        var failed = '<li class="empty">Could not reach the flight service just now.</li>';
+        el.groundList.innerHTML = failed;
+        el.arrivalsList.innerHTML = failed;
+        el.departuresList.innerHTML = failed;
+        el.nearbyList.innerHTML = failed;
       });
+  }
+
+  // A tab asks for one board; tapping a pin on the map asks for all of them.
+  function setBoardFocus(focus) {
+    [].forEach.call(document.querySelectorAll('.board'), function (board) {
+      board.hidden = focus !== 'all' && board.dataset.board !== focus;
+    });
   }
 
   function markAirportPins() {
@@ -738,46 +783,75 @@
     });
   }
 
-  function renderBoard(list, ul, direction) {
+  function setBoardTitles(counts) {
+    var n = function (key) { return counts && counts[key] ? ' (' + counts[key] + ')' : ''; };
+    el.groundTitle.textContent = 'At the airport right now' + n('onGround');
+    el.arrivalsTitle.textContent = 'Landing here soon' + n('arrivals');
+    el.departuresTitle.textContent = 'Leaving from here' + n('departures');
+    el.nearbyTitle.textContent = 'Other planes in the sky nearby' + n('nearby');
+  }
+
+  function boardName(f) {
+    if (f.airline) return f.airline + (f.number ? ' ' + f.number : '');
+    return f.callsign || f.registration || 'Unknown aircraft';
+  }
+
+  var BOARD_EMPTY = {
+    ground: 'No aircraft on the ground here are broadcasting at the moment.',
+    in: 'Nothing is on its way in at the moment.',
+    out: 'Nothing has left here in the last little while.',
+    near: 'No other aircraft are flying close by.'
+  };
+
+  function renderBoard(list, ul, kind) {
     ul.innerHTML = '';
     if (!list || !list.length) {
       var li = document.createElement('li');
       li.className = 'empty';
-      li.textContent = direction === 'in'
-        ? 'Nothing is on its way in at the moment.'
-        : 'Nothing has left in the last little while.';
+      li.textContent = BOARD_EMPTY[kind];
       ul.appendChild(li);
       return;
     }
 
     list.forEach(function (f) {
-      var li = document.createElement('li');
+      var item = document.createElement('li');
       var btn = document.createElement('button');
       btn.type = 'button';
 
       var name = document.createElement('span');
       name.className = 'fl-name';
-      name.textContent = (f.airline ? f.airline + ' ' : '') + (f.number || f.callsign);
+      name.textContent = boardName(f);
 
       var when = document.createElement('span');
       when.className = 'fl-when';
-      when.textContent = f.onGround ? 'on the ground'
-        : (direction === 'in'
-            ? (f.minutes !== null ? 'in ' + f.minutes + ' min' : formatDistance(f.distance) + ' away')
-            : formatDistance(f.distance) + ' away');
-
       var where = document.createElement('span');
       where.className = 'fl-route';
-      var place = f.other.city || f.other.name || f.other.iata;
-      where.textContent = (direction === 'in' ? 'from ' : 'to ') + place +
-                          (f.other.iata ? ' (' + f.other.iata + ')' : '');
+      var place = f.other ? (f.other.city || f.other.name || f.other.iata) : null;
+      var code = f.other && f.other.iata ? ' (' + f.other.iata + ')' : '';
+
+      if (kind === 'ground') {
+        when.textContent = f.moving ? 'moving' : 'parked';
+        where.textContent = !place
+          ? (f.description || f.typeCode || 'On the ground here')
+          : (f.heading === 'out' ? 'going to ' + place + code : 'came in from ' + place + code);
+      } else if (kind === 'in') {
+        when.textContent = f.minutes !== null ? 'in ' + f.minutes + ' min' : formatDistance(f.distance) + ' away';
+        where.textContent = place ? 'from ' + place + code : 'on its way in';
+      } else if (kind === 'out') {
+        when.textContent = formatDistance(f.distance) + ' away';
+        where.textContent = place ? 'to ' + place + code : 'on its way out';
+      } else {
+        when.textContent = formatAltitude(f.altitude, false);
+        where.textContent = (f.description || f.typeCode || 'Aircraft') +
+                            ' · ' + formatDistance(f.distance) + ' away';
+      }
 
       btn.appendChild(name);
       btn.appendChild(when);
       btn.appendChild(where);
       btn.addEventListener('click', function () { openFromBoard(f); });
-      li.appendChild(btn);
-      ul.appendChild(li);
+      item.appendChild(btn);
+      ul.appendChild(item);
     });
   }
 
@@ -801,7 +875,7 @@
 
   function clearSelection() {
     state.selected = null;
-    state.follow = false;
+    setFollow(false);
     state.listSignature = '';
     if (state.routeLayer) { map.removeLayer(state.routeLayer); state.routeLayer = null; }
     drawPlanes();
@@ -870,13 +944,13 @@
     state.selected = hex;
     state.airport = null;
     markAirportPins();
-    state.follow = false;
-    el.followBtn.textContent = 'Keep this plane centred';
+    setFollow(false);
     state.listSignature = '';
     var p = state.planes[hex];
     if (p && recenter) map.setView([p.animLat, p.animLon], Math.max(map.getZoom(), 8));
     drawPlanes();
     showView('detail');
+    highlightTab(null);
     renderDetail();
     loadExtras(hex);
   }
@@ -1062,14 +1136,64 @@
 
   el.refreshBtn.addEventListener('click', function () { refresh(); });
 
-  [].forEach.call(document.querySelectorAll('#backBtn, [data-back]'), function (btn) {
-    btn.addEventListener('click', function () {
-      clearSelection();
-      state.airport = null;
-      markAirportPins();
-      showView('list');
-      renderList();
+  function goBackToList() {
+    clearSelection();
+    state.airport = null;
+    state.airportFocus = 'all';
+    setBoardFocus('all');
+    markAirportPins();
+    showView('list');
+    renderList();
+    highlightTab(el.panel.classList.contains('open') ? 'live' : 'home');
+  }
+
+  /* ------------------------------------------------------------- bottom nav */
+
+  function highlightTab(tab) {
+    state.tab = tab;
+    [].forEach.call(el.bottomNav.querySelectorAll('.nav-btn'), function (btn) {
+      btn.setAttribute('aria-current', String(btn.dataset.tab === tab));
     });
+  }
+
+  function measureNav() {
+    var nav = el.bottomNav.offsetHeight;
+    document.documentElement.style.setProperty('--nav-h', (nav || 0) + 'px');
+    var header = document.querySelector('.topbar').offsetHeight;
+    if (header) document.documentElement.style.setProperty('--header-h', header + 'px');
+  }
+
+  function openBoardTab(focus) {
+    var centre = map.getCenter();
+    var ap = state.airport || nearestAirport(centre.lat, centre.lng);
+    if (!ap) {
+      showBanner('There is no airport near this part of the map. Drag the map towards a city and try again.', 'search');
+      return;
+    }
+    openAirport(ap, focus);
+    highlightTab(focus);
+  }
+
+  el.bottomNav.addEventListener('click', function (e) {
+    var btn = e.target.closest('.nav-btn');
+    if (!btn) return;
+    var tab = btn.dataset.tab;
+
+    if (tab === 'home') {
+      goBackToList();
+      openPanel(false);
+      highlightTab('home');
+    } else if (tab === 'live') {
+      goBackToList();
+      openPanel(true);
+      highlightTab('live');
+    } else {
+      openBoardTab(tab);
+    }
+  });
+
+  [].forEach.call(document.querySelectorAll('#backBtn, [data-back]'), function (btn) {
+    btn.addEventListener('click', goBackToList);
   });
 
   el.destBtn.addEventListener('click', function () {
@@ -1079,13 +1203,19 @@
     openAirport(findAirport(leg.destination.iata) || leg.destination);
   });
 
-  el.followBtn.addEventListener('click', function () {
-    state.follow = !state.follow;
-    el.followBtn.textContent = state.follow ? 'Stop keeping it centred' : 'Keep this plane centred';
-  });
+  function setFollow(on) {
+    state.follow = on;
+    el.followBtn.textContent = on ? 'Stop tracking this plane' : 'Track this plane';
+    el.followBtn.classList.toggle('tracking', on);
+    el.trackNote.hidden = !on;
+  }
+
+  el.followBtn.addEventListener('click', function () { setFollow(!state.follow); });
 
   el.panelHandle.addEventListener('click', function () {
-    openPanel(!el.panel.classList.contains('open'));
+    var opening = !el.panel.classList.contains('open');
+    openPanel(opening);
+    if (state.view === 'list') highlightTab(opening ? 'live' : 'home');
   });
 
   el.locateBtn.addEventListener('click', function () { locate(true); });
@@ -1166,7 +1296,7 @@
   function applySize(size) {
     document.documentElement.setAttribute('data-size', size);
     try { localStorage.setItem('ff-size', size); } catch (e) { /* ignore */ }
-    setTimeout(function () { map.invalidateSize(); measureHandle(); }, 60);
+    setTimeout(function () { map.invalidateSize(); measureHandle(); measureNav(); }, 60);
   }
 
   function measureHandle() {
@@ -1229,6 +1359,18 @@
 
   /* ----------------------------------------------------------------- wiring */
 
+  /* Tapping bare map means "I am done with this one". Leaflet does not raise a
+     map click for taps that land on a plane or an airport pin, so this only
+     fires on empty space. */
+  map.on('click', function () {
+    if (state.selected || state.airport) goBackToList();
+  });
+
+  // Dragging the map by hand should never fight the map re-centring itself.
+  map.on('dragstart', function () {
+    if (state.follow) setFollow(false);
+  });
+
   map.on('moveend zoomend', function () {
     clearTimeout(moveTimer);
     moveTimer = setTimeout(function () {
@@ -1245,7 +1387,7 @@
     if (!document.hidden) refresh();
   });
 
-  window.addEventListener('resize', function () { map.invalidateSize(); measureHandle(); });
+  window.addEventListener('resize', function () { map.invalidateSize(); measureHandle(); measureNav(); });
   if (window.ResizeObserver) new ResizeObserver(measureHandle).observe(el.panelHandle);
 
   el.helpClose.addEventListener('click', function () {
@@ -1263,6 +1405,8 @@
 
   showView('list');
   measureHandle();
+  measureNav();
+  highlightTab(window.matchMedia('(min-width: 800px)').matches ? 'live' : 'home');
   refresh();
   setInterval(animate, ANIM_MS);
 })();

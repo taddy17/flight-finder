@@ -64,15 +64,30 @@
       <h2 id="airportName">&nbsp;</h2>
       <p id="airportWhere" class="sub"></p>
 
-      <h3 class="board-title">Landing here soon</h3>
-      <ul id="arrivalsList" class="flight-list"></ul>
+      <div class="board" data-board="ground">
+        <h3 class="board-title" id="groundTitle">At the airport right now</h3>
+        <ul id="groundList" class="flight-list"></ul>
+      </div>
 
-      <h3 class="board-title">Leaving from here</h3>
-      <ul id="departuresList" class="flight-list"></ul>
+      <div class="board" data-board="arrivals">
+        <h3 class="board-title" id="arrivalsTitle">Landing here soon</h3>
+        <ul id="arrivalsList" class="flight-list"></ul>
+      </div>
 
-      <p class="hint board-note">These are aircraft in the sky right now, worked
-        out from what each plane is broadcasting. Flights that have not taken off
-        yet do not appear.</p>
+      <div class="board" data-board="departures">
+        <h3 class="board-title" id="departuresTitle">Leaving from here</h3>
+        <ul id="departuresList" class="flight-list"></ul>
+      </div>
+
+      <div class="board" data-board="nearby">
+        <h3 class="board-title" id="nearbyTitle">Other planes in the sky nearby</h3>
+        <ul id="nearbyList" class="flight-list"></ul>
+      </div>
+
+      <p class="hint board-note">Every plane on this page is sending a live radio
+        signal right now, this second. A flight still sitting at the gate with its
+        transponder switched off will not be here, and neither will a scheduled
+        flight that has not arrived at the airport yet.</p>
     </section>
 
     <!-- DETAIL VIEW -->
@@ -115,11 +130,33 @@
         <p class="photo-credit">Photo: airport-data.com</p>
       </div>
 
-      <button id="followBtn" class="btn btn-primary btn-wide">Keep this plane centred</button>
+      <p id="trackNote" class="track-note" role="status" hidden>
+        Following this plane. The map moves along with it.
+      </p>
+      <button id="followBtn" class="btn btn-primary btn-wide">Track this plane</button>
       <button id="destBtn" class="btn btn-wide" hidden>See all flights at this airport</button>
     </section>
   </div>
 </aside>
+
+<nav id="bottomNav" class="bottom-nav" aria-label="Main">
+  <button type="button" class="nav-btn" data-tab="home">
+    <span class="nav-icon" aria-hidden="true">&#128506;&#65039;</span>
+    <span class="nav-label">Map</span>
+  </button>
+  <button type="button" class="nav-btn" data-tab="departures">
+    <span class="nav-icon" aria-hidden="true">&#128747;</span>
+    <span class="nav-label">Departures</span>
+  </button>
+  <button type="button" class="nav-btn" data-tab="arrivals">
+    <span class="nav-icon" aria-hidden="true">&#128748;</span>
+    <span class="nav-label">Arrivals</span>
+  </button>
+  <button type="button" class="nav-btn" data-tab="live">
+    <span class="nav-icon" aria-hidden="true">&#9992;&#65039;</span>
+    <span class="nav-label">Live flights</span>
+  </button>
+</nav>
 
 <div id="settingsOverlay" class="overlay" hidden>
   <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
@@ -162,6 +199,7 @@
       <li><b>Tap an airport</b> to see what is landing and leaving there.</li>
       <li>Use <b>◎</b> to jump to the planes above your own home.</li>
       <li>Drag the map with one finger to look somewhere else.</li>
+      <li><b>Tap an empty patch of map</b> to let go of the plane you picked.</li>
     </ul>
     <button id="helpClose" class="btn btn-primary btn-wide">Start looking at planes</button>
   </div>

@@ -35,9 +35,14 @@ Node 18 or newer is the only requirement — there is nothing to `npm install`.
   Overlapping aircraft are thinned out so busy airspace stays readable.
 - **Tap a plane** for the airline and flight number, the two airports in plain
   words ("Chicago → Los Angeles"), how far along it is, and roughly how long is
-  left in the air.
-- **Tap an airport** for what is landing there soon and what has just left,
-  worked out live from the aircraft themselves.
+  left in the air. **Track this plane** keeps the map centred on it; tapping an
+  empty patch of map lets go again.
+- **Tap an airport** for four live boards: what is on the ground there right now
+  (parked or taxiing, with its transponder on), what is landing soon, what is
+  leaving, and any other aircraft flying close by.
+- **Bottom navigation on phones** — Map, Departures, Arrivals and Live flights.
+  Departures and Arrivals use the airport you are looking at, or the nearest big
+  one to the middle of the map.
 - **Search** a flight number (`AA100`, `DL1556`) or a tail number (`N221WN`).
 - **◎** centres the map on wherever you are. If location is declined, the map
   opens over the nearest busy airspace guessed from your time zone.
@@ -67,7 +72,7 @@ one place to cache, rate-limit and fail over.
 | `POST /api/routes` | batch route lookup for `{ planes: [{callsign, lat, lng}] }` |
 | `GET /api/route?callsign=&lat=&lon=` | one route |
 | `GET /api/aircraft?hex=` | aircraft type, operator, photo |
-| `GET /api/airport?iata=` | live arrivals and departures for one airport |
+| `GET /api/airport?iata=` | live board for one airport: on the ground, arriving, leaving, nearby |
 | `GET /api/search?q=` | find a flight by flight number or tail number |
 | `GET /api/health` | liveness plus cache size |
 
@@ -104,8 +109,10 @@ non-commercial use, and the Esri basemap has its own terms of use.
   This choice was measured, not assumed: against live traffic over Chicago
   O'Hare, the widely used callsign database returned a plausible route for 4 of
   19 flights, while the position-aware `routeset` service managed 15 of 19.
-- **Airport boards show aircraft already in the air**, not a full schedule. A
-  flight that has not pushed back yet will not be listed.
+- **Airport boards are built from live transponder signals, not a schedule.**
+  Every aircraft listed is broadcasting at that moment, including ones parked and
+  taxiing at the airport. A flight that has not reached the airport yet, or whose
+  transponder is off, will not appear.
 - **Arrival times** are distance ÷ current ground speed, so they tighten up as a
   plane slows for approach.
 
@@ -118,6 +125,7 @@ The design targets comfortable use at arm's length on a phone:
 - no information conveyed by colour alone, and no hover-only behaviour
 - full keyboard operation, visible focus rings, and `prefers-reduced-motion`
   honoured
+- a four-item bottom bar on phones, each item an icon with a written label
 - plain language throughout: "Coming down" rather than "descending at 1,800 fpm"
 
 ## Licence

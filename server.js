@@ -504,55 +504,87 @@ async function airportBoard(iata) {
   if (!airport) return null;
 
   const flights = await fetchFlights(airport.lat, airport.lon, 200);
-  const candidates = flights.aircraft.filter((a) => a.callsign);
-  const { routes } = await fetchRoutes(
-    candidates.map((a) => ({ callsign: a.callsign, lat: a.lat, lng: a.lon })), 100);
 
+  // Airport service vehicles broadcast too, but they are not aircraft.
+  const live = flights.aircraft.filter((a) => !['C1', 'C2', 'C3'].includes(a.category));
+
+  const withCallsign = live.filter((a) => a.callsign);
+  const { routes } = await fetchRoutes(
+    withCallsign.map((a) => ({ callsign: a.callsign, lat: a.lat, lng: a.lon })), 100);
+
+  const onGround = [];
   const arrivals = [];
   const departures = [];
+  const nearby = [];
 
-  for (const a of candidates) {
-    const leg = pickLeg(routes[a.callsign], a.lat, a.lon);
-    if (!leg) continue;
-    const route = routes[a.callsign];
+  for (const a of live) {
     const distance = haversineNm(airport.lat, airport.lon, a.lat, a.lon);
+    const route = a.callsign ? routes[a.callsign] : null;
+    const leg = pickLeg(route, a.lat, a.lon);
 
     const entry = {
       hex: a.hex,
-      callsign: a.callsign,
+      callsign: a.callsign || null,
       registration: a.registration,
-      airline: route.airline,
-      number: route.number,
-      flightNumber: route.flightNumber,
+      typeCode: a.typeCode,
+      description: a.description,
+      airline: route ? route.airline : null,
+      number: route ? route.number : null,
+      flightNumber: route ? route.flightNumber : null,
       altitude: a.altitude,
       onGround: a.onGround,
       groundSpeed: a.groundSpeed,
       verticalRate: a.verticalRate,
-      distance: Math.round(distance),
+      distance: Math.round(distance * 10) / 10,
+      seen: a.seen,
       lat: a.lat,
       lon: a.lon,
+      other: null,
+      minutes: null,
     };
 
-    if (leg.destination.iata === airport.iata) {
-      // Something sitting on the ground here has already arrived.
-      if (a.onGround && distance < 6) continue;
+    // Sitting on the airport itself: parked, at a gate, or taxiing.
+    if (a.onGround && distance <= 8) {
+      entry.other = leg ? (leg.destination.iata === airport.iata ? leg.origin : leg.destination) : null;
+      entry.heading = leg && leg.origin.iata === airport.iata ? 'out' : 'in';
+      entry.moving = (a.groundSpeed || 0) > 3;
+      onGround.push(entry);
+      continue;
+    }
+    if (a.onGround) continue;   // on the ground somewhere else entirely
+
+    if (leg && leg.destination.iata === airport.iata) {
       entry.other = leg.origin;
       entry.minutes = a.groundSpeed > 60 ? Math.round((distance / a.groundSpeed) * 60) : null;
       arrivals.push(entry);
-    } else if (leg.origin.iata === airport.iata) {
+    } else if (leg && leg.origin.iata === airport.iata) {
       entry.other = leg.destination;
-      entry.minutes = null;
       departures.push(entry);
+    } else if (distance <= 30) {
+      // Flying close by with no route of ours — still a real aircraft overhead.
+      if (leg) entry.other = leg.destination;
+      nearby.push(entry);
     }
   }
 
+  onGround.sort((x, y) => Number(y.moving) - Number(x.moving) ||
+                          (y.groundSpeed || 0) - (x.groundSpeed || 0));
   arrivals.sort((x, y) => (x.minutes ?? 999) - (y.minutes ?? 999) || x.distance - y.distance);
-  departures.sort((x, y) => Number(y.onGround) - Number(x.onGround) || x.distance - y.distance);
+  departures.sort((x, y) => x.distance - y.distance);
+  nearby.sort((x, y) => x.distance - y.distance);
 
   return {
     airport,
+    onGround: onGround.slice(0, 40),
     arrivals: arrivals.slice(0, 25),
     departures: departures.slice(0, 25),
+    nearby: nearby.slice(0, 25),
+    counts: {
+      onGround: onGround.length,
+      arrivals: arrivals.length,
+      departures: departures.length,
+      nearby: nearby.length,
+    },
     updatedAt: Date.now(),
   };
 }

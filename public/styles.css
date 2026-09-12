@@ -285,6 +285,22 @@ main {
   border-bottom: 3px solid var(--line);
 }
 .board-note { margin-top: 1rem; }
+.board[hidden] { display: none !important; }
+
+/* Tracking is a mode, so the button has to look different while it is on. */
+.btn.tracking { background: var(--navy); border-color: var(--navy); color: #fff; }
+.btn.tracking:hover { background: var(--navy-dark); }
+
+.track-note {
+  margin: 1rem 0 0.5rem;
+  padding: 0.6rem 0.8rem;
+  background: #eef4ff;
+  border: 2px solid var(--navy);
+  border-radius: 0.6rem;
+  font-weight: 700;
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
 .fl-when { grid-column: 2; grid-row: 1; text-align: right; font-weight: 800; font-size: 0.95rem; color: var(--accent); white-space: nowrap; }
 
 .me-marker {
@@ -402,6 +418,49 @@ main {
 .photo-wrap img { width: 100%; border-radius: 0.7rem; border: 2px solid var(--line); display: block; }
 .photo-credit { margin: 0.3rem 0 0; font-size: 0.8rem; color: var(--ink-soft); }
 
+/* -------------------------------------------------------------- bottom nav */
+
+/* Phones get a permanent set of four big destinations; on a wide screen the
+   side panel already shows everything, so the bar would only take up room. */
+.bottom-nav { display: none; }
+
+@media (max-width: 799px) {
+  .bottom-nav {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 1400;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    background: var(--paper);
+    border-top: 3px solid var(--navy);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .nav-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.1rem;
+    min-height: 3.6rem;
+    padding: 0.35rem 0.15rem;
+    font: inherit;
+    background: none;
+    border: 0;
+    border-top: 4px solid transparent;
+    color: var(--ink-soft);
+    cursor: pointer;
+  }
+  .nav-icon { font-size: 1.35rem; line-height: 1.1; }
+  .nav-label { font-size: 0.72rem; font-weight: 700; text-align: center; line-height: 1.15; }
+
+  .nav-btn[aria-current="true"] {
+    color: var(--navy);
+    border-top-color: var(--accent);
+    background: #f3f6fb;
+  }
+}
+
 /* ----------------------------------------------------------------- overlay */
 
 .overlay {
@@ -460,8 +519,12 @@ main {
   .btn-plain .btn-label { display: none; }
   .panel {
     position: fixed;
-    left: 0; right: 0; bottom: 0;
-    max-height: 78vh;
+    left: 0; right: 0;
+    bottom: var(--nav-h, 3.6rem);
+    /* Never taller than the gap between the header and the nav bar, or the
+       sheet's own handle disappears behind the search box. */
+    max-height: calc(100vh - var(--nav-h, 3.6rem) - var(--header-h, 9rem));
+    max-height: calc(100dvh - var(--nav-h, 3.6rem) - var(--header-h, 9rem));
     border-radius: 1rem 1rem 0 0;
     box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
     transition: transform 0.25s ease;
@@ -470,7 +533,10 @@ main {
   }
   .panel.open { transform: translateY(0); }
   .panel-handle { border-radius: 1rem 1rem 0 0; }
-  .panel-body { max-height: calc(78vh - var(--handle-h, 3.4rem)); }
+  .panel-body {
+    max-height: calc(100vh - var(--nav-h, 3.6rem) - var(--header-h, 9rem) - var(--handle-h, 3.4rem));
+    max-height: calc(100dvh - var(--nav-h, 3.6rem) - var(--header-h, 9rem) - var(--handle-h, 3.4rem));
+  }
   .facts { grid-template-columns: 1fr 1fr; }
 }
 
