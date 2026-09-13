@@ -199,17 +199,28 @@ main {
 
 /* ------------------------------------------------------------ plane markers */
 
+/* Each aircraft is one absolutely positioned node inside its own map pane,
+   moved only with a transform so the browser never has to lay the page out
+   again for a plane that has shifted a few pixels. */
 .plane-marker {
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: 0;
   width: 30px;
   height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
+  pointer-events: auto;   /* the pane itself is transparent to the mouse */
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
+.plane-marker:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .plane-marker .rot {
+  display: block;
   transform-origin: 50% 50%;
-  will-change: transform;
   line-height: 0;
 }
 .plane-marker svg { display: block; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.45)); }

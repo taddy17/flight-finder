@@ -11,8 +11,11 @@
 
 const http = require('http');
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const zlib = require('zlib');
+const crypto = require('crypto');
 
 const PORT = Number(process.env.PORT || 5173);
 const HOST = '0.0.0.0';
@@ -63,22 +66,69 @@ const aircraftCache = loadCache(AIRCRAFT_CACHE_FILE);
 const airlineCache = loadCache(AIRLINE_CACHE_FILE);
 const flightCache = new Map();
 
+/**
+ * Writing the caches used to mean re-serialising every file, synchronously, on
+ * the event loop — a 180 kB JSON.stringify in the middle of serving requests.
+ * Now each cache is written only when it actually changed, off the hot path,
+ * and through a temp file so a crash mid-write cannot leave a corrupt cache.
+ */
+const CACHE_FILES = [
+  { file: ROUTE_CACHE_FILE, data: () => routeCache },
+  { file: AIRCRAFT_CACHE_FILE, data: () => aircraftCache },
+  { file: AIRLINE_CACHE_FILE, data: () => airlineCache },
+];
+const dirty = new Set();
 let saveTimer = null;
-function scheduleSave() {
+let saving = false;
+
+function scheduleSave(which) {
+  if (which) dirty.add(which);
+  else CACHE_FILES.forEach((c) => dirty.add(c.file));
+  armSave();
+}
+
+function armSave() {
   if (saveTimer) return;
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    try {
-      fs.mkdirSync(CACHE_DIR, { recursive: true });
-      fs.writeFileSync(ROUTE_CACHE_FILE, JSON.stringify(routeCache));
-      fs.writeFileSync(AIRCRAFT_CACHE_FILE, JSON.stringify(aircraftCache));
-      fs.writeFileSync(AIRLINE_CACHE_FILE, JSON.stringify(airlineCache));
-    } catch (err) {
-      console.warn('could not write cache:', err.message);
-    }
-  }, 5000);
+  saveTimer = setTimeout(flushCaches, 5000);
   saveTimer.unref?.();
 }
+
+async function flushCaches() {
+  saveTimer = null;
+  if (!dirty.size) return;
+  // A write is already in progress; come back to these once it is done.
+  if (saving) { armSave(); return; }
+  saving = true;
+  const todo = CACHE_FILES.filter((c) => dirty.has(c.file));
+  dirty.clear();
+  try {
+    await fsp.mkdir(CACHE_DIR, { recursive: true });
+    for (const entry of todo) {
+      const tmp = entry.file + '.tmp';
+      await fsp.writeFile(tmp, JSON.stringify(entry.data()));
+      await fsp.rename(tmp, entry.file);
+    }
+  } catch (err) {
+    console.warn('could not write cache:', err.message);
+  } finally {
+    saving = false;
+  }
+}
+
+/** Expired entries would otherwise pile up in the file for ever. */
+function pruneCaches() {
+  const now = Date.now();
+  let dropped = 0;
+  for (const cs of Object.keys(routeCache)) {
+    const e = routeCache[cs];
+    if (!e || now - e.at > (e.value ? TTL.route : TTL.routeMiss) * 3) {
+      delete routeCache[cs];
+      dropped++;
+    }
+  }
+  if (dropped) scheduleSave(ROUTE_CACHE_FILE);
+}
+setInterval(pruneCaches, 6 * 3600e3).unref?.();
 
 function fresh(entry, ttl) {
   return entry && Date.now() - entry.at < ttl;
@@ -170,28 +220,40 @@ function cleanCallsign(s) {
   return (s || '').trim().toUpperCase();
 }
 
+/**
+ * Every byte here is multiplied by a few hundred aircraft and sent every few
+ * seconds, so absent values are left out of the object entirely rather than
+ * shipped as nulls, and numbers are rounded to the precision that is actually
+ * meaningful — five decimals of latitude is about a metre. Both shrink the
+ * payload directly and make it compress considerably better.
+ */
+function round(value, places) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const f = Math.pow(10, places);
+  return Math.round(value * f) / f;
+}
+
 function normalizeAircraft(a) {
   const onGround = a.alt_baro === 'ground';
   return {
     hex: a.hex,
-    callsign: cleanCallsign(a.flight),
-    registration: a.r || null,
-    typeCode: a.t || null,
-    lat: a.lat,
-    lon: a.lon,
-    altitude: onGround ? 0 : (typeof a.alt_baro === 'number' ? a.alt_baro : null),
-    onGround,
-    groundSpeed: typeof a.gs === 'number' ? a.gs : null, // knots
-    track: typeof a.track === 'number' ? a.track : (typeof a.true_heading === 'number' ? a.true_heading : null),
-    verticalRate: typeof a.baro_rate === 'number' ? a.baro_rate
-      : (typeof a.geom_rate === 'number' ? a.geom_rate : null),
-    squawk: a.squawk || null,
-    emergency: a.emergency && a.emergency !== 'none' ? a.emergency : null,
-    category: a.category || null,
-    description: a.desc || null,
-    operator: a.ownOp || null,
-    year: a.year || null,
-    seen: typeof a.seen_pos === 'number' ? a.seen_pos : null,
+    callsign: cleanCallsign(a.flight) || undefined,
+    registration: a.r || undefined,
+    typeCode: a.t || undefined,
+    lat: round(a.lat, 5),
+    lon: round(a.lon, 5),
+    altitude: onGround ? 0 : round(a.alt_baro, 0),
+    onGround: onGround || undefined,
+    groundSpeed: round(a.gs, 1), // knots
+    track: round(typeof a.track === 'number' ? a.track : a.true_heading, 1),
+    verticalRate: round(typeof a.baro_rate === 'number' ? a.baro_rate : a.geom_rate, 0),
+    squawk: a.squawk || undefined,
+    emergency: a.emergency && a.emergency !== 'none' ? a.emergency : undefined,
+    category: a.category || undefined,
+    description: a.desc || undefined,
+    operator: a.ownOp || undefined,
+    year: a.year || undefined,
+    seen: round(a.seen_pos, 1),
   };
 }
 
@@ -288,6 +350,24 @@ function normalizeRoute(row) {
   };
 }
 
+/** Route cache hits only — never touches the network, so it is free to call. */
+function cachedRoutesFor(planes) {
+  const out = {};
+  for (const p of planes) {
+    const cs = p && p.callsign;
+    if (!cs || out[cs] !== undefined) continue;
+    const hit = routeCache[cs];
+    if (!fresh(hit, hit && hit.value ? TTL.route : TTL.routeMiss)) continue;
+    const route = hit.value;
+    if (route && !route.airline && route.airlineCode) {
+      const airline = airlineCache[route.airlineCode];
+      if (fresh(airline, TTL.airline)) applyAirline(route, airline.value);
+    }
+    out[cs] = route;
+  }
+  return out;
+}
+
 async function fetchRoutes(planes, budget = 80) {
   const out = {};
   const todo = [];
@@ -317,7 +397,7 @@ async function fetchRoutes(planes, budget = 80) {
         routeCache[cs] = { at: Date.now(), value };
         out[cs] = value;
       });
-      scheduleSave();
+      scheduleSave(ROUTE_CACHE_FILE);
     } catch (err) {
       console.warn('route lookup failed:', err.message);
     }
@@ -357,7 +437,7 @@ async function attachAirlineNames(routes) {
       if (row && row.name) value = { name: row.name, iata: row.iata || null };
     } catch { /* the code itself is a usable fallback */ }
     airlineCache[code] = { at: Date.now(), value };
-    scheduleSave();
+    scheduleSave(AIRLINE_CACHE_FILE);
   }));
 
   Object.keys(routes).forEach((cs) => {
@@ -403,7 +483,7 @@ async function lookupCallsign(callsign) {
       return (aircraftCache['CS:' + cs] && aircraftCache['CS:' + cs].value) || null;
     }
     aircraftCache['CS:' + cs] = { at: Date.now(), value };
-    scheduleSave();
+    scheduleSave(AIRCRAFT_CACHE_FILE);
     return value;
   });
 }
@@ -435,7 +515,7 @@ async function fetchAircraftInfo(hex) {
       return aircraftCache[id]?.value ?? null;
     }
     aircraftCache[id] = { at: Date.now(), value };
-    scheduleSave();
+    scheduleSave(AIRCRAFT_CACHE_FILE);
     return value;
   });
 }
@@ -499,10 +579,27 @@ function pickLeg(route, lat, lon) {
  * There is no free schedule feed, so build the board from what is actually in
  * the sky: every aircraft within range whose current leg starts or ends here.
  */
+const boardCache = new Map();   // iata -> { at, value }
+const TTL_BOARD = 6e3;
+
 async function airportBoard(iata) {
-  const airport = airportsByIata.get((iata || '').trim().toUpperCase());
+  const code = (iata || '').trim().toUpperCase();
+  const airport = airportsByIata.get(code);
   if (!airport) return null;
 
+  // Building a board means a positions call plus a route batch. Several people
+  // (or several tabs) looking at the same airport should cost one of each.
+  const hit = boardCache.get(code);
+  if (fresh(hit, TTL_BOARD)) return hit.value;
+  return once('b:' + code, async () => {
+    const value = await buildBoard(airport);
+    boardCache.set(code, { at: Date.now(), value });
+    if (boardCache.size > 40) boardCache.delete(boardCache.keys().next().value);
+    return value;
+  });
+}
+
+async function buildBoard(airport) {
   const flights = await fetchFlights(airport.lat, airport.lon, 200);
 
   // Airport service vehicles broadcast too, but they are not aircraft.
@@ -602,34 +699,145 @@ const MIME = {
   '.webmanifest': 'application/manifest+json',
 };
 
-function sendJSON(res, status, body) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store',
-    'Content-Length': Buffer.byteLength(text),
-  });
-  res.end(text);
+const COMPRESSIBLE = /^(text\/|image\/svg|application\/(json|javascript|manifest))/;
+const MIN_COMPRESS = 1024;   // below this the headers cost more than the saving
+
+function etagOf(buf) {
+  return '"' + crypto.createHash('sha1').update(buf).digest('base64').slice(0, 22) + '"';
+}
+
+function encodingFor(req) {
+  const accept = req.headers['accept-encoding'] || '';
+  if (/\bbr\b/.test(accept)) return 'br';
+  if (/\bgzip\b/.test(accept)) return 'gzip';
+  return null;
+}
+
+const gzip = (buf, opts) => new Promise((ok, no) =>
+  zlib.gzip(buf, opts || {}, (e, r) => (e ? no(e) : ok(r))));
+const brotli = (buf, quality) => new Promise((ok, no) =>
+  zlib.brotliCompress(buf, {
+    params: {
+      [zlib.constants.BROTLI_PARAM_QUALITY]: quality,
+      [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length,
+    },
+  }, (e, r) => (e ? no(e) : ok(r))));
+
+/* --------------------------------------------------------- static assets */
+
+/**
+ * The front end is a handful of files that never change while the server is
+ * running, so read and compress each of them exactly once at start-up. After
+ * that a page load is pure memory: no disk, no compression, no work per
+ * request beyond writing bytes to the socket — and a repeat visit is a 304
+ * costing a few dozen bytes.
+ */
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const assets = new Map();  // '/app.js' -> { body, gzip, br, etag, type }
+
+async function loadAsset(rel) {
+  const file = path.join(PUBLIC_DIR, rel);
+  const body = await fsp.readFile(file);
+  const type = MIME[path.extname(file)] || 'application/octet-stream';
+  const asset = { body, type, etag: etagOf(body), gzip: null, br: null };
+  assets.set('/' + rel, asset);
+
+  if (COMPRESSIBLE.test(type) && body.length >= MIN_COMPRESS) {
+    // Quality 11 is slow, but it happens once and buys roughly 20% over gzip.
+    brotli(body, 11).then((b) => { asset.br = b; }, () => {});
+    gzip(body, { level: 9 }).then((b) => { asset.gzip = b; }, () => {});
+  }
+  return asset;
+}
+
+async function loadAssets() {
+  const walk = async (dir, prefix) => {
+    for (const entry of await fsp.readdir(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const rel = prefix ? prefix + '/' + entry.name : entry.name;
+      if (entry.isDirectory()) await walk(path.join(dir, entry.name), rel);
+      else await loadAsset(rel).catch(() => {});
+    }
+  };
+  await walk(PUBLIC_DIR, '');
+
+  // Editing a file while the server runs should still show up on reload.
+  try {
+    fs.watch(PUBLIC_DIR, { recursive: true }, (_evt, name) => {
+      if (name) loadAsset(String(name).split(path.sep).join('/')).catch(() => assets.clear());
+    }).unref?.();
+  } catch { /* watching is a convenience, not a requirement */ }
 }
 
 function serveStatic(req, res, pathname) {
   const rel = pathname === '/' ? '/index.html' : pathname;
-  const file = path.join(__dirname, 'public', path.normalize(rel).replace(/^(\.\.[/\\])+/, ''));
-  if (!file.startsWith(path.join(__dirname, 'public'))) {
-    res.writeHead(403).end('Forbidden');
+  const clean = '/' + path.posix.normalize(rel).replace(/^(\.\.\/)+/, '').replace(/^\/+/, '');
+  const asset = assets.get(clean);
+  if (!asset) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Not found');
     return;
   }
-  fs.readFile(file, (err, buf) => {
-    if (err) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
-      return;
-    }
-    res.writeHead(200, {
-      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-      'Cache-Control': 'no-cache',
-    });
+
+  if (req.headers['if-none-match'] === asset.etag) {
+    res.writeHead(304, { ETag: asset.etag, 'Cache-Control': cacheControl() });
+    res.end();
+    return;
+  }
+
+  const want = encodingFor(req);
+  const encoded = want === 'br' ? asset.br : want === 'gzip' ? asset.gzip : null;
+  const body = encoded || asset.body;
+  const headers = {
+    'Content-Type': asset.type,
+    'Content-Length': body.length,
+    'Cache-Control': cacheControl(),
+    ETag: asset.etag,
+    Vary: 'Accept-Encoding',
+  };
+  if (encoded) headers['Content-Encoding'] = want;
+  res.writeHead(200, headers);
+  if (req.method === 'HEAD') res.end();
+  else res.end(body);
+}
+
+function cacheControl() {
+  /* "no-cache" does not mean "do not store" — it means "store it, but ask me
+     before using it". The browser keeps the file and we answer with a 304 of
+     no body, so a repeat visit costs one small round trip per file and no
+     bytes. A max-age here would be wrong: none of these filenames carry a
+     version, so a stale app.js would go on being used against a fresh
+     index.html until the age ran out. */
+  return 'no-cache';
+}
+
+/* ------------------------------------------------------------ json replies */
+
+/**
+ * A busy patch of sky is a hundred kilobytes of JSON; gzipped it is closer to
+ * ten. On a phone over mobile data that is the difference between a map that
+ * updates smoothly and one that stutters.
+ */
+function sendJSON(res, status, body, req) {
+  const text = Buffer.from(JSON.stringify(body), 'utf8');
+  const want = req && text.length >= MIN_COMPRESS ? encodingFor(req) : null;
+
+  const finish = (buf, encoding) => {
+    if (res.writableEnded) return;
+    const headers = {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Length': buf.length,
+      Vary: 'Accept-Encoding',
+    };
+    if (encoding) headers['Content-Encoding'] = encoding;
+    res.writeHead(status, headers);
     res.end(buf);
-  });
+  };
+
+  if (!want) return finish(text, null);
+  // Quality 4 keeps brotli faster than gzip while still compressing better.
+  const work = want === 'br' ? brotli(text, 4) : gzip(text, { level: 6 });
+  work.then((buf) => finish(buf, want), () => finish(text, null));
 }
 
 function readBody(req, limit = 64 * 1024) {
@@ -649,23 +857,28 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
 
   try {
-    if (p === '/api/health') return sendJSON(res, 200, { ok: true, cachedRoutes: Object.keys(routeCache).length });
+    if (p === '/api/health') return sendJSON(res, 200, { ok: true, cachedRoutes: Object.keys(routeCache).length }, req);
 
     if (p === '/api/flights') {
       const lat = Number(url.searchParams.get('lat'));
       const lon = Number(url.searchParams.get('lon'));
       let dist = Math.round(Number(url.searchParams.get('dist') || 100));
       if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
-        return sendJSON(res, 400, { error: 'lat and lon are required' });
+        return sendJSON(res, 400, { error: 'lat and lon are required' }, req);
       }
       dist = Math.min(250, Math.max(1, Number.isFinite(dist) ? dist : 100));
-      return sendJSON(res, 200, await fetchFlights(lat, lon, dist));
+      const flights = await fetchFlights(lat, lon, dist);
+      // Send the routes we already know along with the positions. It costs
+      // nothing upstream and saves the browser a whole extra round trip
+      // before it can put a name to most of the planes on screen.
+      return sendJSON(res, 200,
+        Object.assign({}, flights, { routes: cachedRoutesFor(flights.aircraft) }), req);
     }
 
     if (p === '/api/routes' && req.method === 'POST') {
       const body = JSON.parse((await readBody(req)) || '{}');
       const list = Array.isArray(body.planes) ? body.planes.slice(0, 150) : [];
-      return sendJSON(res, 200, await fetchRoutes(list, 100));
+      return sendJSON(res, 200, await fetchRoutes(list, 100), req);
     }
 
     if (p === '/api/route') {
@@ -675,30 +888,30 @@ const server = http.createServer(async (req, res) => {
         lat: Number(url.searchParams.get('lat')) || 0,
         lng: Number(url.searchParams.get('lon')) || 0,
       }], 1);
-      return sendJSON(res, 200, { route: result.routes[cleanCallsign(cs)] || null });
+      return sendJSON(res, 200, { route: result.routes[cleanCallsign(cs)] || null }, req);
     }
 
     if (p === '/api/aircraft') {
       const aircraft = await fetchAircraftInfo(url.searchParams.get('hex'));
-      return sendJSON(res, 200, { aircraft });
+      return sendJSON(res, 200, { aircraft }, req);
     }
 
     if (p === '/api/airport') {
       const board = await airportBoard(url.searchParams.get('iata'));
-      if (!board) return sendJSON(res, 404, { error: 'unknown airport' });
-      return sendJSON(res, 200, board);
+      if (!board) return sendJSON(res, 404, { error: 'unknown airport' }, req);
+      return sendJSON(res, 200, board, req);
     }
 
     if (p === '/api/search') {
-      return sendJSON(res, 200, await searchFlight(url.searchParams.get('q')));
+      return sendJSON(res, 200, await searchFlight(url.searchParams.get('q')), req);
     }
 
-    if (p.startsWith('/api/')) return sendJSON(res, 404, { error: 'unknown endpoint' });
+    if (p.startsWith('/api/')) return sendJSON(res, 404, { error: 'unknown endpoint' }, req);
 
     return serveStatic(req, res, p);
   } catch (err) {
     console.error(`${p} failed:`, err.message);
-    sendJSON(res, 502, { error: 'Could not reach the flight data service. Please try again.' });
+    sendJSON(res, 502, { error: 'Could not reach the flight data service. Please try again.' }, req);
   }
 });
 
@@ -710,6 +923,12 @@ function lanAddress() {
   }
   return null;
 }
+
+// Idle keep-alive connections are cheap and save a handshake on every poll.
+server.keepAliveTimeout = 72e3;
+server.headersTimeout = 76e3;
+
+loadAssets().catch((err) => console.warn('could not preload public/:', err.message));
 
 server.listen(PORT, HOST, () => {
   const lan = lanAddress();
