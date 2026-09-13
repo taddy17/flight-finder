@@ -56,6 +56,7 @@
     settingsStatus: $('settingsStatus'),
     sizeChoices: $('sizeChoices'),
     unitChoices: $('unitChoices'),
+    mapChoices: $('mapChoices'),
     showHelpBtn: $('showHelpBtn'),
     locateBtn: $('locateBtn'),
     searchForm: $('searchForm'),
@@ -140,18 +141,65 @@
     tap: true
   });
 
-  // A calm, pale base map keeps the planes themselves the loudest thing on screen.
-  var ESRI = 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/';
-  L.tileLayer(ESRI + 'World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
-    attribution: 'Map &copy; Esri &middot; flight data from adsb.lol and adsbdb.com',
-    maxZoom: 16,
-    minZoom: 3
-  }).addTo(map);
-  L.tileLayer(ESRI + 'World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 16,
-    minZoom: 3,
-    pane: 'shadowPane'
-  }).addTo(map);
+  /* The picture under the planes. Plain is the default — a calm, pale map keeps
+     the planes themselves the loudest thing on screen — but the ground is worth
+     looking at too, so satellite and the rest are a tap away in Settings.
+     `labels` is a separate see-through layer of place names, for the pictures
+     that do not come with any of their own. */
+  var ESRI = 'https://services.arcgisonline.com/ArcGIS/rest/services/';
+  var DATA_CREDIT = ' &middot; flight data from adsb.lol and adsbdb.com';
+  var MAP_STYLES = {
+    plain: {
+      base: 'Canvas/World_Light_Gray_Base',
+      labels: 'Canvas/World_Light_Gray_Reference',
+      credit: 'Map &copy; Esri'
+    },
+    streets: {
+      base: 'World_Street_Map',
+      credit: 'Map &copy; Esri, HERE, Garmin'
+    },
+    landscape: {
+      base: 'World_Topo_Map',
+      credit: 'Map &copy; Esri, USGS, NOAA'
+    },
+    satellite: {
+      base: 'World_Imagery',
+      labels: 'Reference/World_Boundaries_and_Places',
+      credit: 'Pictures &copy; Esri, Maxar, Earthstar Geographics',
+      dark: true
+    }
+  };
+
+  var mapStyle = 'plain';
+  var baseLayer = null;
+  var labelLayer = null;
+
+  function tiles(path, opts) {
+    opts.maxZoom = 16;
+    opts.minZoom = 3;
+    return L.tileLayer(ESRI + path + '/MapServer/tile/{z}/{y}/{x}', opts);
+  }
+
+  function applyMapStyle(name) {
+    var style = MAP_STYLES[name] ? name : 'plain';
+    var conf = MAP_STYLES[style];
+    mapStyle = style;
+
+    var old = [baseLayer, labelLayer];
+    baseLayer = tiles(conf.base, { attribution: conf.credit + DATA_CREDIT }).addTo(map);
+    labelLayer = conf.labels ? tiles(conf.labels, { pane: 'shadowPane' }).addTo(map) : null;
+    // Swap rather than clear first, so the map never flashes empty mid-change.
+    old.forEach(function (layer) { if (layer) map.removeLayer(layer); });
+    baseLayer.bringToBack();
+
+    /* Planes are navy on white, which needs help against a dark photograph. */
+    document.body.setAttribute('data-map', conf.dark ? 'dark' : 'light');
+    try { localStorage.setItem('ff-map', style); } catch (e) { /* ignore */ }
+  }
+
+  var savedMap = null;
+  try { savedMap = localStorage.getItem('ff-map'); } catch (e) { /* ignore */ }
+  applyMapStyle(savedMap || 'plain');
 
   map.setView(guessHome(), 8);
 
@@ -1424,12 +1472,22 @@
     [].forEach.call(el.unitChoices.querySelectorAll('.choice'), function (b) {
       b.setAttribute('aria-pressed', String((b.dataset.units === 'imperial') === imperial));
     });
+    [].forEach.call(el.mapChoices.querySelectorAll('.choice'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.map === mapStyle));
+    });
   }
 
   el.sizeChoices.addEventListener('click', function (e) {
     var btn = e.target.closest('.choice');
     if (!btn) return;
     applySize(btn.dataset.size);
+    markChoices();
+  });
+
+  el.mapChoices.addEventListener('click', function (e) {
+    var btn = e.target.closest('.choice');
+    if (!btn) return;
+    applyMapStyle(btn.dataset.map);
     markChoices();
   });
 

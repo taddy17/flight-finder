@@ -235,6 +235,13 @@ main {
   color: var(--accent-dark);
 }
 
+/* On a photograph or a busy street map, navy on navy-ish ground disappears.
+   A heavier white outline and a deeper shadow cut the plane back out of it. */
+body[data-map="dark"] .plane-body { stroke-width: 2.4; }
+body[data-map="dark"] .plane-marker svg { filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.9)); }
+body[data-map="dark"] .plane-marker.ground .plane-body { fill: #cbd5e1; }
+body[data-map="dark"] .me-marker { box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.55); }
+
 .plane-label {
   position: absolute;
   left: 50%;
