@@ -14,6 +14,7 @@
   --good: #157347;
   --focus: #0b5ed7;
   --tap: 3.1rem;          /* minimum touch target */
+  --tap-slim: 2.6rem;     /* the same, where a row of them would eat the map */
 }
 
 html[data-size="large"]   { --base: 22px; }
@@ -38,9 +39,15 @@ html, body {
 body {
   display: grid;
   grid-template-rows: auto 1fr;
-  grid-template-columns: 1fr;
+  /* minmax(0, …) rather than 1fr: a grid column refuses to go below its
+     content's minimum width, and one long word in the header or a banner is
+     enough to push the whole page — the settings button with it — off the
+     side of a narrow phone. */
+  grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
 }
+
+.topbar, main { min-width: 0; }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -59,8 +66,8 @@ body {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.55rem 0.8rem;
-  padding-top: max(0.55rem, env(safe-area-inset-top));
+  padding: 0.4rem 0.8rem;
+  padding-top: max(0.4rem, env(safe-area-inset-top));
   background: var(--navy);
   color: #fff;
   flex-wrap: wrap;
@@ -227,6 +234,13 @@ main {
   border-width: 2px;
   color: var(--accent-dark);
 }
+
+/* On a photograph or a busy street map, navy on navy-ish ground disappears.
+   A heavier white outline and a deeper shadow cut the plane back out of it. */
+body[data-map="dark"] .plane-body { stroke-width: 2.4; }
+body[data-map="dark"] .plane-marker svg { filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.9)); }
+body[data-map="dark"] .plane-marker.ground .plane-body { fill: #cbd5e1; }
+body[data-map="dark"] .me-marker { box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.55); }
 
 .plane-label {
   position: absolute;
@@ -439,7 +453,7 @@ main {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     background: var(--paper);
-    border-top: 3px solid var(--navy);
+    border-top: 2px solid var(--navy);
     padding-bottom: env(safe-area-inset-bottom);
   }
 
@@ -448,18 +462,18 @@ main {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.1rem;
-    min-height: 3.6rem;
-    padding: 0.35rem 0.15rem;
+    gap: 0.05rem;
+    min-height: 2.9rem;
+    padding: 0.2rem 0.15rem;
     font: inherit;
     background: none;
     border: 0;
-    border-top: 4px solid transparent;
+    border-top: 3px solid transparent;
     color: var(--ink-soft);
     cursor: pointer;
   }
-  .nav-icon { font-size: 1.35rem; line-height: 1.1; }
-  .nav-label { font-size: 0.72rem; font-weight: 700; text-align: center; line-height: 1.15; }
+  .nav-icon { font-size: 1.15rem; line-height: 1.05; }
+  .nav-label { font-size: 0.68rem; font-weight: 700; text-align: center; line-height: 1.1; }
 
   .nav-btn[aria-current="true"] {
     color: var(--navy);
@@ -513,17 +527,39 @@ main {
 
 /* Phones: the panel is a sheet that slides up from the bottom. */
 @media (max-width: 799px) {
+  /* Brand, search and settings share one row: the second row of header was
+     costing a strip of sky. The words "Flight Finder" are the part that gives
+     way — the ✈ says it, and the title is still read out by a screen reader. */
   .topbar {
     display: grid;
-    grid-template-columns: auto 1fr auto;
-    grid-template-areas: "brand title size" "search search search";
-    gap: 0.5rem;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "brand search size";
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.6rem;
+    padding-top: max(0.3rem, env(safe-area-inset-top));
   }
-  .brand { grid-area: brand; }
-  .topbar h1 { grid-area: title; font-size: 1.1rem; align-self: center; }
-  .search { grid-area: search; }
+  .brand { grid-area: brand; font-size: 1.5rem; }
+  .search { grid-area: search; min-width: 0; gap: 0.35rem; }
   .btn-plain { grid-area: size; }
   .btn-plain .btn-label { display: none; }
+
+  html:not([data-size="largest"]) .topbar h1 {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* At the largest text size sharing a row would leave a letterbox to type
+     into, so the search takes a row of its own — and the title comes back to
+     keep the first row company. */
+  html[data-size="largest"] .topbar {
+    grid-template-areas: "brand title size" "search search search";
+  }
+  html[data-size="largest"] .topbar h1 { grid-area: title; font-size: 1.1rem; }
+
+  .search input { min-height: var(--tap-slim); font-size: 1rem; padding: 0 0.7rem; }
+  .search .btn { min-height: var(--tap-slim); padding: 0 0.8rem; }
+  .btn-plain { min-height: var(--tap-slim); padding: 0 0.6rem; }
   .panel {
     position: fixed;
     left: 0; right: 0;

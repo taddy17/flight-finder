@@ -18,6 +18,24 @@
   var MI_PER_NM = 1.15078;
   var FT_PER_M = 3.28084;
 
+  /* Zoomed out, a plane stands for a much bigger patch of ground, so the same
+     number of markers reads as a swarm. Both the spacing between markers and
+     the ceiling on them loosen up as you zoom back in. */
+  var SPARSE = [
+    { zoom: 5, cell: 76, markers: 70 },
+    { zoom: 6, cell: 62, markers: 110 },
+    { zoom: 7, cell: 52, markers: 150 },
+    { zoom: 8, cell: 42, markers: 200 }
+  ];
+
+  function crowding() {
+    var zoom = map.getZoom();
+    for (var i = 0; i < SPARSE.length; i++) {
+      if (zoom <= SPARSE[i].zoom) return SPARSE[i];
+    }
+    return { cell: 34, markers: MAX_MARKERS };
+  }
+
   var imperial = /^en-(US|LR|MM)/i.test(navigator.language || 'en-US');
   try {
     var savedUnits = localStorage.getItem('ff-units');
@@ -38,6 +56,7 @@
     settingsStatus: $('settingsStatus'),
     sizeChoices: $('sizeChoices'),
     unitChoices: $('unitChoices'),
+    mapChoices: $('mapChoices'),
     showHelpBtn: $('showHelpBtn'),
     locateBtn: $('locateBtn'),
     searchForm: $('searchForm'),
@@ -122,18 +141,65 @@
     tap: true
   });
 
-  // A calm, pale base map keeps the planes themselves the loudest thing on screen.
-  var ESRI = 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/';
-  L.tileLayer(ESRI + 'World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
-    attribution: 'Map &copy; Esri &middot; flight data from adsb.lol and adsbdb.com',
-    maxZoom: 16,
-    minZoom: 3
-  }).addTo(map);
-  L.tileLayer(ESRI + 'World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 16,
-    minZoom: 3,
-    pane: 'shadowPane'
-  }).addTo(map);
+  /* The picture under the planes. Plain is the default — a calm, pale map keeps
+     the planes themselves the loudest thing on screen — but the ground is worth
+     looking at too, so satellite and the rest are a tap away in Settings.
+     `labels` is a separate see-through layer of place names, for the pictures
+     that do not come with any of their own. */
+  var ESRI = 'https://services.arcgisonline.com/ArcGIS/rest/services/';
+  var DATA_CREDIT = ' &middot; flight data from adsb.lol and adsbdb.com';
+  var MAP_STYLES = {
+    plain: {
+      base: 'Canvas/World_Light_Gray_Base',
+      labels: 'Canvas/World_Light_Gray_Reference',
+      credit: 'Map &copy; Esri'
+    },
+    streets: {
+      base: 'World_Street_Map',
+      credit: 'Map &copy; Esri, HERE, Garmin'
+    },
+    landscape: {
+      base: 'World_Topo_Map',
+      credit: 'Map &copy; Esri, USGS, NOAA'
+    },
+    satellite: {
+      base: 'World_Imagery',
+      labels: 'Reference/World_Boundaries_and_Places',
+      credit: 'Pictures &copy; Esri, Maxar, Earthstar Geographics',
+      dark: true
+    }
+  };
+
+  var mapStyle = 'plain';
+  var baseLayer = null;
+  var labelLayer = null;
+
+  function tiles(path, opts) {
+    opts.maxZoom = 16;
+    opts.minZoom = 3;
+    return L.tileLayer(ESRI + path + '/MapServer/tile/{z}/{y}/{x}', opts);
+  }
+
+  function applyMapStyle(name) {
+    var style = MAP_STYLES[name] ? name : 'plain';
+    var conf = MAP_STYLES[style];
+    mapStyle = style;
+
+    var old = [baseLayer, labelLayer];
+    baseLayer = tiles(conf.base, { attribution: conf.credit + DATA_CREDIT }).addTo(map);
+    labelLayer = conf.labels ? tiles(conf.labels, { pane: 'shadowPane' }).addTo(map) : null;
+    // Swap rather than clear first, so the map never flashes empty mid-change.
+    old.forEach(function (layer) { if (layer) map.removeLayer(layer); });
+    baseLayer.bringToBack();
+
+    /* Planes are navy on white, which needs help against a dark photograph. */
+    document.body.setAttribute('data-map', conf.dark ? 'dark' : 'light');
+    try { localStorage.setItem('ff-map', style); } catch (e) { /* ignore */ }
+  }
+
+  var savedMap = null;
+  try { savedMap = localStorage.getItem('ff-map'); } catch (e) { /* ignore */ }
+  applyMapStyle(savedMap || 'plain');
 
   map.setView(guessHome(), 8);
 
@@ -178,6 +244,9 @@
         return { iata: a[0], icao: a[1], name: a[2], city: a[3], country: a[4],
                  lat: a[5], lon: a[6], size: a[7] };
       });
+      // Biggest first, so when only a handful of pins will fit they are the
+      // airports someone is most likely to be looking for.
+      airports.sort(function (a, b) { return a.size - b.size; });
       drawAirports();
     })
     .catch(function () { /* the map still works without pins */ });
@@ -185,12 +254,18 @@
   function drawAirports() {
     var zoom = map.getZoom();
     var bounds = map.getBounds();
+    // Zoomed out the pins crowd each other and the planes; close in there is
+    // room to name every field in view.
+    var most = zoom <= 8 ? 16 : 45;
     var keep = {};
 
     airports.forEach(function (ap) {
-      if (zoom < AIRPORT_ZOOM[ap.size]) return;
-      if (!bounds.contains([ap.lat, ap.lon])) return;
-      if (Object.keys(keep).length > 45) return;
+      var open = state.airport && state.airport.iata === ap.iata;
+      if (!open) {
+        if (zoom < AIRPORT_ZOOM[ap.size]) return;
+        if (!bounds.contains([ap.lat, ap.lon])) return;
+        if (Object.keys(keep).length >= most) return;
+      }
       keep[ap.iata] = true;
 
       if (!airportMarkers[ap.iata]) {
@@ -583,8 +658,7 @@
   /* Over a busy airport a hundred planes can land on the same few pixels.
      Keep one plane per small patch of screen so the map stays readable —
      the full list is still in the panel. */
-  function declutter(planes) {
-    var cell = 34;
+  function declutter(planes, cell) {
     var taken = {};
     var out = [];
     for (var i = 0; i < planes.length; i++) {
@@ -600,14 +674,21 @@
   }
 
   function drawPlanes() {
-    var hideGround = map.getZoom() < LABEL_ZOOM;
+    var wide = map.getZoom() < LABEL_ZOOM;
+    var room = crowding();
     var candidates = visiblePlanes().filter(function (p) {
       if (isGroundVehicle(p)) return false;
-      return !(hideGround && p.onGround && p.hex !== state.selected);
+      return !(wide && p.onGround && p.hex !== state.selected);
     });
-    // Airborne planes win a contested patch of screen over taxiing ones.
-    candidates.sort(function (a, b) { return (a.onGround ? 1 : 0) - (b.onGround ? 1 : 0); });
-    var list = declutter(candidates).slice(0, MAX_MARKERS);
+    /* Airborne planes win a contested patch of screen over taxiing ones. Zoomed
+       out there is only room for a few, so the airliner beats the light aircraft
+       next to it; closer in, the plane nearest the middle keeps winning. */
+    candidates.sort(function (a, b) {
+      var ground = (a.onGround ? 1 : 0) - (b.onGround ? 1 : 0);
+      if (ground || !wide) return ground;
+      return markerSize(b) - markerSize(a);
+    });
+    var list = declutter(candidates, room.cell).slice(0, room.markers);
     var keep = {};
 
     list.forEach(function (p) {
@@ -748,6 +829,7 @@
     setBoardTitles(null);
 
     map.setView([ap.lat, ap.lon], Math.max(map.getZoom(), 8));
+    drawAirports();      // the airport you are reading about always keeps its pin
     markAirportPins();
     if (state.airportFocus === 'all') highlightTab(null);
 
@@ -1390,12 +1472,22 @@
     [].forEach.call(el.unitChoices.querySelectorAll('.choice'), function (b) {
       b.setAttribute('aria-pressed', String((b.dataset.units === 'imperial') === imperial));
     });
+    [].forEach.call(el.mapChoices.querySelectorAll('.choice'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.map === mapStyle));
+    });
   }
 
   el.sizeChoices.addEventListener('click', function (e) {
     var btn = e.target.closest('.choice');
     if (!btn) return;
     applySize(btn.dataset.size);
+    markChoices();
+  });
+
+  el.mapChoices.addEventListener('click', function (e) {
+    var btn = e.target.closest('.choice');
+    if (!btn) return;
+    applyMapStyle(btn.dataset.map);
     markChoices();
   });
 

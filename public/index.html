@@ -190,6 +190,17 @@
     </fieldset>
 
     <fieldset class="setting">
+      <legend>Map picture</legend>
+      <p class="setting-note">Satellite shows real photographs of the ground.</p>
+      <div class="choices" id="mapChoices">
+        <button type="button" class="choice" data-map="plain">Plain</button>
+        <button type="button" class="choice" data-map="streets">Streets</button>
+        <button type="button" class="choice" data-map="landscape">Landscape</button>
+        <button type="button" class="choice" data-map="satellite">Satellite</button>
+      </div>
+    </fieldset>
+
+    <fieldset class="setting">
       <legend>Updating</legend>
       <p id="settingsStatus" class="setting-note" role="status">Starting up…</p>
       <button id="refreshBtn" type="button" class="btn btn-wide">Refresh the map now</button>
@@ -210,6 +221,7 @@
       <li>Use <b>◎</b> to jump to the planes above your own home.</li>
       <li>Drag the map with one finger to look somewhere else.</li>
       <li><b>Tap an empty patch of map</b> to let go of the plane you picked.</li>
+      <li>Use <b>&#9881;</b> to swap the map for satellite pictures of the ground.</li>
     </ul>
     <button id="helpClose" class="btn btn-primary btn-wide">Start looking at planes</button>
   </div>
