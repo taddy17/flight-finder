@@ -67,6 +67,34 @@ The browser never calls the data services directly — most of them send no CORS
 headers, so everything goes through `/api/*` on the local server. That also gives
 one place to cache, rate-limit and fail over.
 
+### Keeping it quick
+
+A few hundred aircraft move at once on a phone that is also drawing a map, so
+both halves are written to do as little as possible:
+
+- **Aircraft are plain pooled `<div>`s in their own map pane,** moved only with
+  a CSS transform, and one that has not visibly moved since the last frame is
+  not touched at all. Positions come from Web-Mercator arithmetic done inline
+  against values read once per frame rather than through a per-aircraft
+  projection call.
+- **One animation loop, driven by the display.** Between server updates each
+  aircraft is carried forward along its own heading and eased towards the next
+  fix, so nothing ever jumps sideways. A hidden tab draws nothing and asks for
+  nothing.
+- **Nothing is rebuilt that has not changed.** The flight list is forty rows
+  made once and then reworded; the route line works its great circle out once
+  per leg and afterwards only moves the point where flown becomes still-to-fly.
+- **The 3,244 airports live in a coarse grid,** so panning looks at the handful
+  of cells on screen instead of the whole list.
+- **The server answers from memory.** Static files are read, hashed and
+  compressed once at start-up and afterwards served straight from RAM, with
+  ETags so a repeat visit is a 304. JSON replies are compressed too, and
+  positions are rounded to the precision that actually means something —
+  together that takes a busy patch of sky from about 31 kB to under 7 kB.
+- **Routes ride along with the positions.** Any route the server already knows
+  is sent with the aircraft, so most planes have a name before the follow-up
+  request is even made.
+
 ### API endpoints
 
 | Endpoint | Purpose |
