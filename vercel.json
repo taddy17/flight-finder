@@ -1,0 +1,24 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+
+  "//": [
+    "public/ is served straight from the CDN. Only /api/* wakes a function,",
+    "which is both faster for the map and cheaper than rendering every file.",
+    "Vercel's default for these static files is already revalidate-on-use,",
+    "which is what unversioned app.js/styles.css need, so no header rules.",
+    "",
+    "includeFiles: the airport list is read with fs at runtime, so Vercel's",
+    "import tracing cannot see it and would otherwise leave it out of the",
+    "bundle. maxDuration covers the 12s upstream timeout in server.js, which",
+    "the 10s default would cut short."
+  ],
+
+  "outputDirectory": "public",
+
+  "functions": {
+    "api/**": {
+      "includeFiles": "public/airports.json",
+      "maxDuration": 15
+    }
+  }
+}

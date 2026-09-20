@@ -21,7 +21,12 @@ const PORT = Number(process.env.PORT || 5173);
 const HOST = '0.0.0.0';
 const UA = 'FlightFinder/1.0 (personal hobby flight map)';
 
-const CACHE_DIR = path.join(__dirname, 'cache');
+// On a normal machine the caches live beside the code and survive restarts.
+// On a serverless host the bundle is read-only, so they go to the one writable
+// directory there instead: warm invocations still reuse them, cold ones refill.
+const SERVERLESS = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const CACHE_DIR = SERVERLESS ? path.join(os.tmpdir(), 'flight-finder-cache')
+                             : path.join(__dirname, 'cache');
 const ROUTE_CACHE_FILE = path.join(CACHE_DIR, 'routes.json');
 const AIRCRAFT_CACHE_FILE = path.join(CACHE_DIR, 'aircraft.json');
 const AIRLINE_CACHE_FILE = path.join(CACHE_DIR, 'airlines.json');
@@ -762,11 +767,29 @@ async function loadAssets() {
   await walk(PUBLIC_DIR, '');
 
   // Editing a file while the server runs should still show up on reload.
+  // There is nothing to watch on a serverless host: the bundle never changes.
+  if (SERVERLESS) return;
   try {
     fs.watch(PUBLIC_DIR, { recursive: true }, (_evt, name) => {
       if (name) loadAsset(String(name).split(path.sep).join('/')).catch(() => assets.clear());
     }).unref?.();
   } catch { /* watching is a convenience, not a requirement */ }
+}
+
+/**
+ * Preloading used to be fired off and forgotten at start-up, which left a
+ * window where a fast first request found an empty map and got a 404. Now the
+ * work happens once and every static reply waits on the same promise.
+ */
+let assetsPromise = null;
+
+function assetsReady() {
+  if (!assetsPromise) {
+    assetsPromise = loadAssets().catch((err) => {
+      console.warn('could not preload public/:', err.message);
+    });
+  }
+  return assetsPromise;
 }
 
 function serveStatic(req, res, pathname) {
@@ -836,8 +859,11 @@ function sendJSON(res, status, body, req) {
 
   if (!want) return finish(text, null);
   // Quality 4 keeps brotli faster than gzip while still compressing better.
+  // The promise is returned, not dropped: a serverless host may freeze the
+  // process the moment the handler settles, and an un-awaited compress would
+  // then never reach the socket.
   const work = want === 'br' ? brotli(text, 4) : gzip(text, { level: 6 });
-  work.then((buf) => finish(buf, want), () => finish(text, null));
+  return work.then((buf) => finish(buf, want), () => finish(text, null));
 }
 
 function readBody(req, limit = 64 * 1024) {
@@ -852,7 +878,13 @@ function readBody(req, limit = 64 * 1024) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
+/**
+ * The whole app in one function: every route, and the static files behind them.
+ * It is deliberately independent of how it gets called, so the same code can
+ * sit behind a long-running http server here or behind a serverless host that
+ * hands it one request at a time (see api/[...path].js).
+ */
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const p = url.pathname;
 
@@ -908,12 +940,13 @@ const server = http.createServer(async (req, res) => {
 
     if (p.startsWith('/api/')) return sendJSON(res, 404, { error: 'unknown endpoint' }, req);
 
+    await assetsReady();
     return serveStatic(req, res, p);
   } catch (err) {
     console.error(`${p} failed:`, err.message);
-    sendJSON(res, 502, { error: 'Could not reach the flight data service. Please try again.' }, req);
+    return sendJSON(res, 502, { error: 'Could not reach the flight data service. Please try again.' }, req);
   }
-});
+}
 
 function lanAddress() {
   for (const list of Object.values(os.networkInterfaces())) {
@@ -924,16 +957,28 @@ function lanAddress() {
   return null;
 }
 
-// Idle keep-alive connections are cheap and save a handshake on every poll.
-server.keepAliveTimeout = 72e3;
-server.headersTimeout = 76e3;
+function startServer() {
+  const server = http.createServer(handleRequest);
 
-loadAssets().catch((err) => console.warn('could not preload public/:', err.message));
+  // Idle keep-alive connections are cheap and save a handshake on every poll.
+  server.keepAliveTimeout = 72e3;
+  server.headersTimeout = 76e3;
 
-server.listen(PORT, HOST, () => {
-  const lan = lanAddress();
-  console.log('\n  ✈  Flight Finder is running\n');
-  console.log(`     On this computer:  http://localhost:${PORT}`);
-  if (lan) console.log(`     On your phone:     http://${lan}:${PORT}   (same Wi-Fi)`);
-  console.log('\n     Press Control-C to stop.\n');
-});
+  assetsReady();
+
+  server.listen(PORT, HOST, () => {
+    const lan = lanAddress();
+    console.log('\n  ✈  Flight Finder is running\n');
+    console.log(`     On this computer:  http://localhost:${PORT}`);
+    if (lan) console.log(`     On your phone:     http://${lan}:${PORT}   (same Wi-Fi)`);
+    console.log('\n     Press Control-C to stop.\n');
+  });
+
+  return server;
+}
+
+// Run the server when started directly; stay quiet when something else — a
+// serverless entry point, a test — only wants the handler.
+if (require.main === module) startServer();
+
+module.exports = { handleRequest, startServer };
