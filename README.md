@@ -128,6 +128,28 @@ positions rather than blanking the map.
 commercial or high-volume with it. The ADS-B feeds are offered for personal and
 non-commercial use, and the Esri basemap has its own terms of use.
 
+## If it stops loading
+
+The app is served by `server.js` on your own computer, so the page is there for
+exactly as long as that command is running.
+
+- **"Not found", or the page never arrives.** Check the terminal you ran
+  `npm start` in. If it has been closed, if the computer was restarted, or if
+  Control-C was pressed, run `npm start` again. Closing the laptop lid does not
+  stop it, but shutting down does.
+- **It times out on a phone that worked yesterday.** The address on the phone
+  (`http://192.168.x.x:5173`) is your computer's address on the Wi-Fi, and the
+  router can hand out a different one after a restart. Look at what `npm start`
+  prints now and use that address — or add it to the home screen again.
+  Both devices also have to be on the same network.
+- **"Port 5173 is already in use."** Flight Finder is probably still running in
+  another window; open http://localhost:5173. To run a second copy anyway:
+  `PORT=5174 npm start`.
+- **The map loads but no planes appear.** That is the data services, not the
+  server: the status line says so, the last known positions stay on screen, and
+  it retries by itself. `curl http://localhost:5173/api/health` should answer
+  `{"ok":true,...}`.
+
 ## Honest limitations
 
 - **Coverage is community ADS-B.** Very remote areas and mid-ocean stretches have

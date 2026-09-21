@@ -735,12 +735,38 @@ const brotli = (buf, quality) => new Promise((ok, no) =>
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const assets = new Map();  // '/app.js' -> { body, gzip, br, etag, type }
 
+/**
+ * Turn a request path or a watch event name into a real file inside public/,
+ * or null if it points anywhere else. Everything that reaches the disk goes
+ * through here, so "/../server.js" and friends cannot.
+ */
+function insidePublic(rel) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(String(rel));
+  } catch {
+    return null;   // a malformed %-escape is not a file we have
+  }
+  if (decoded.includes('\0')) return null;
+  const file = path.resolve(PUBLIC_DIR, decoded.replace(/^\/+/, ''));
+  if (file !== PUBLIC_DIR && !file.startsWith(PUBLIC_DIR + path.sep)) return null;
+  return file;
+}
+
+/** The key an asset is filed under: always '/'-separated, always decoded. */
+function assetKey(rel) {
+  const file = insidePublic(rel);
+  if (!file) return null;
+  return '/' + path.relative(PUBLIC_DIR, file).split(path.sep).join('/');
+}
+
 async function loadAsset(rel) {
-  const file = path.join(PUBLIC_DIR, rel);
+  const file = insidePublic(rel);
+  if (!file) throw new Error('outside public/');
   const body = await fsp.readFile(file);
   const type = MIME[path.extname(file)] || 'application/octet-stream';
   const asset = { body, type, etag: etagOf(body), gzip: null, br: null };
-  assets.set('/' + rel, asset);
+  assets.set(assetKey(rel), asset);
 
   if (COMPRESSIBLE.test(type) && body.length >= MIN_COMPRESS) {
     // Quality 11 is slow, but it happens once and buys roughly 20% over gzip.
@@ -764,15 +790,31 @@ async function loadAssets() {
   // Editing a file while the server runs should still show up on reload.
   try {
     fs.watch(PUBLIC_DIR, { recursive: true }, (_evt, name) => {
-      if (name) loadAsset(String(name).split(path.sep).join('/')).catch(() => assets.clear());
+      if (!name) return;
+      const rel = String(name).split(path.sep).join('/');
+      loadAsset(rel).catch(() => {
+        /* The event was for something we cannot read: an editor's temporary
+           file, a half-written save, a file that has just been deleted. Forget
+           that one entry if it really is gone and leave everything else alone.
+           Emptying the whole map here — as this used to — turned one stray
+           file event into a server that answered "Not found" for every page,
+           for the rest of its life, with a restart the only way back. */
+        const key = assetKey(rel);
+        const file = insidePublic(rel);
+        if (key && file && !fs.existsSync(file)) assets.delete(key);
+      });
     }).unref?.();
   } catch { /* watching is a convenience, not a requirement */ }
 }
 
-function serveStatic(req, res, pathname) {
-  const rel = pathname === '/' ? '/index.html' : pathname;
-  const clean = '/' + path.posix.normalize(rel).replace(/^(\.\.\/)+/, '').replace(/^\/+/, '');
-  const asset = assets.get(clean);
+async function serveStatic(req, res, pathname) {
+  const clean = assetKey(pathname === '/' ? '/index.html' : pathname);
+  /* Memory first, disk second. The cache is an optimisation, never the record
+     of what this server can serve: if a file is missing from it — because a
+     request beat start-up to it, or a reload failed earlier — read it now
+     rather than telling someone their app is gone. */
+  let asset = clean ? assets.get(clean) : null;
+  if (!asset && clean) asset = await loadAsset(clean).catch(() => null);
   if (!asset) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Not found');
     return;
@@ -908,7 +950,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p.startsWith('/api/')) return sendJSON(res, 404, { error: 'unknown endpoint' }, req);
 
-    return serveStatic(req, res, p);
+    return await serveStatic(req, res, p);
   } catch (err) {
     console.error(`${p} failed:`, err.message);
     sendJSON(res, 502, { error: 'Could not reach the flight data service. Please try again.' }, req);
@@ -928,12 +970,52 @@ function lanAddress() {
 server.keepAliveTimeout = 72e3;
 server.headersTimeout = 76e3;
 
-loadAssets().catch((err) => console.warn('could not preload public/:', err.message));
-
-server.listen(PORT, HOST, () => {
-  const lan = lanAddress();
-  console.log('\n  ✈  Flight Finder is running\n');
-  console.log(`     On this computer:  http://localhost:${PORT}`);
-  if (lan) console.log(`     On your phone:     http://${lan}:${PORT}   (same Wi-Fi)`);
-  console.log('\n     Press Control-C to stop.\n');
+// A browser that hangs up mid-request, or a port scanner sending nonsense, is
+// not a reason to take the map down with us.
+server.on('clientError', (_err, socket) => {
+  if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+  else socket.destroy();
 });
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n  Port ${PORT} is already in use — Flight Finder may already be running.`);
+    console.error(`  Open http://localhost:${PORT}, or start this one on another port:\n`);
+    console.error(`      PORT=5174 npm start\n`);
+    process.exit(1);
+  }
+  console.error('server error:', err.message);
+});
+
+/**
+ * This is meant to be left running for days and found still working. A single
+ * stray error somewhere in an upstream call would otherwise end the process,
+ * and the first anyone would know of it is the app refusing to load hours
+ * later. Say what happened, loudly, and keep serving.
+ */
+process.on('unhandledRejection', (err) => {
+  console.error('unhandled promise rejection (still running):', (err && err.stack) || err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('uncaught error (still running):', (err && err.stack) || err);
+});
+
+async function start() {
+  // Load the front end before opening the door, so the very first request
+  // cannot arrive to an empty cache and be told "Not found".
+  try {
+    await loadAssets();
+  } catch (err) {
+    console.warn('could not preload public/:', err.message);
+  }
+
+  server.listen(PORT, HOST, () => {
+    const lan = lanAddress();
+    console.log('\n  ✈  Flight Finder is running\n');
+    console.log(`     On this computer:  http://localhost:${PORT}`);
+    if (lan) console.log(`     On your phone:     http://${lan}:${PORT}   (same Wi-Fi)`);
+    console.log('\n     Press Control-C to stop.\n');
+  });
+}
+
+start();
